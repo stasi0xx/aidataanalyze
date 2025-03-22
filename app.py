@@ -8,6 +8,9 @@ import io
 
 st.set_page_config(page_title="AI Sprzedaż - Dashboard", layout="wide")
 
+# 🔒 Informacja o prywatności
+st.warning("\n🔐 **Bezpieczeństwo danych:** Twoje pliki są przetwarzane tymczasowo w pamięci aplikacji i nie są zapisywane ani udostępniane. Dane znikają po odświeżeniu strony.")
+
 st.title("📊 AI Dashboard Sprzedaży e-Commerce")
 
 st.markdown("""
