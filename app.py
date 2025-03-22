@@ -21,8 +21,53 @@ Wgraj dane sprzedaży i reklam, a my:
 sales_file = st.file_uploader("📄 Wgraj plik CSV ze sprzedażą", type=["csv"], key="sales")
 ad_file = st.file_uploader("📄 Wgraj plik CSV z danymi reklamowymi", type=["csv"], key="ads")
 
+# 2. Funkcja fallback - bez regresorów
+def forecast_sales_simple(sales_df, forecast_period=30):
+    daily_sales = sales_df.groupby("Date")["Total_Value"].sum().reset_index()
+    daily_sales.rename(columns={"Date": "ds", "Total_Value": "y"}, inplace=True)
+
+    model = Prophet(yearly_seasonality=True, weekly_seasonality=True)
+    model.fit(daily_sales)
+
+    future = model.make_future_dataframe(periods=forecast_period)
+    forecast = model.predict(future)
+    return forecast, model
+
+# 3. Funkcja zaawansowana - z regresorami
+def forecast_sales_with_regressors(sales_df, ad_df, forecast_period=30):
+    daily_sales = sales_df.groupby("Date")["Total_Value"].sum().reset_index()
+    daily_sales.rename(columns={"Date": "ds", "Total_Value": "y"}, inplace=True)
+
+    ad_features = ad_df.groupby("Date").agg({
+        "Cost": "sum",
+        "CTR": "mean",
+        "Conversions": "sum",
+        "Impressions": "sum"
+    }).reset_index()
+    ad_features.rename(columns={"Date": "ds"}, inplace=True)
+
+    full_data = pd.merge(daily_sales, ad_features, on="ds", how="left").fillna(0)
+
+    model = Prophet(yearly_seasonality=True, weekly_seasonality=True, daily_seasonality=False)
+    model.add_regressor("Cost")
+    model.add_regressor("CTR")
+    model.add_regressor("Conversions")
+    model.add_regressor("Impressions")
+    model.fit(full_data)
+
+    future = model.make_future_dataframe(periods=forecast_period, freq='D')
+
+    recent_days = ad_features.sort_values("ds").tail(7)
+    averages = recent_days[["Cost", "CTR", "Conversions", "Impressions"]].mean()
+
+    future_ads = future.merge(ad_features, on="ds", how="left")
+    for col in ["Cost", "CTR", "Conversions", "Impressions"]:
+        future_ads[col] = future_ads[col].fillna(averages[col])
+
+    forecast = model.predict(future_ads)
+    return forecast, model
+
 if sales_file and ad_file:
-    # 2. Wczytaj dane
     sales_df = pd.read_csv(sales_file)
     ad_df = pd.read_csv(ad_file)
 
@@ -31,45 +76,30 @@ if sales_file and ad_file:
 
     st.success("Pliki zostały poprawnie wczytane!")
 
-    # 3. Analiza sprzedaży
     st.subheader("🧾 Łączna sprzedaż według źródła")
     total_sales = sales_df.groupby("Source")["Total_Value"].sum().sort_values(ascending=False)
     st.bar_chart(total_sales)
 
-    # 4. Analiza ROI
     st.subheader("📈 ROI według platformy reklamowej")
     roi_df = ad_df.groupby("Platform").agg({"Cost": "sum", "Conversions": "sum"}).reset_index()
     roi_df["ROI"] = roi_df["Conversions"] / roi_df["Cost"]
     st.dataframe(roi_df)
     st.bar_chart(roi_df.set_index("Platform")["ROI"])
 
-    # 5. Prognoza sprzedaży z Prophet
     st.subheader("🔮 Prognoza sprzedaży na 30 dni")
-    daily_sales = sales_df.groupby("Date")["Total_Value"].sum().reset_index()
-    daily_sales.rename(columns={"Date": "ds", "Total_Value": "y"}, inplace=True)
+    try:
+        if ad_df["Cost"].sum() < 1 or ad_df["CTR"].mean() < 0.001:
+            forecast, model = forecast_sales_simple(sales_df)
+            st.info("Użyto uproszczonej prognozy bez danych reklamowych.")
+        else:
+            forecast, model = forecast_sales_with_regressors(sales_df, ad_df)
+    except Exception as e:
+        st.error(f"Błąd podczas generowania prognozy: {e}")
+        forecast, model = forecast_sales_simple(sales_df)
 
-    model = Prophet(yearly_seasonality=True, weekly_seasonality=True)
-    model.fit(daily_sales)
-
-    # Bierzemy średnie z ostatnich 7 dni (lub mniej jeśli danych mało)
-    recent_days = ad_features.sort_values("ds").tail(7)
-    averages = recent_days[["Cost", "CTR", "Conversions", "Impressions"]].mean()
-
-    # Tworzymy DataFrame z brakującymi datami
-    missing = future[~future["ds"].isin(ad_features["ds"])]
-    for col in ["Cost", "CTR", "Conversions", "Impressions"]:
-        missing[col] = averages[col]
-
-    # Łączymy aktualne + brakujące
-    future = pd.concat([
-        future[future["ds"].isin(ad_features["ds"])].merge(ad_features, on="ds", how="left"),missing
-    ], ignore_index=True).sort_values("ds")
-
-    forecast = model.predict(future)
     forecast_plot = model.plot(forecast)
     st.pyplot(forecast_plot)
 
-    # 6. Rekomendacje
     st.subheader("💡 Rekomendacje działań")
     top_roi = roi_df.sort_values("ROI", ascending=False).iloc[0]
     low_roi = roi_df.sort_values("ROI", ascending=True).iloc[0]
@@ -79,7 +109,6 @@ if sales_file and ad_file:
     st.info(f"Zwiększ budżet na {top_roi['Platform']}, ROI = {top_roi['ROI']:.2f}")
     st.info(f"Ogranicz wydatki na {low_roi['Platform']}, ROI = {low_roi['ROI']:.2f}")
 
-    # 7. Mapa ciepła sprzedaży
     st.subheader("🔥 Mapa ciepła sprzedaży")
     sales_df["Weekday"] = sales_df["Date"].dt.weekday
     sales_df["Hour"] = np.random.randint(8, 22, len(sales_df))
