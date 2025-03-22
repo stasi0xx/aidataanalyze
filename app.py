@@ -51,7 +51,20 @@ if sales_file and ad_file:
     model = Prophet(yearly_seasonality=True, weekly_seasonality=True)
     model.fit(daily_sales)
 
-    future = model.make_future_dataframe(periods=30)
+    # Bierzemy średnie z ostatnich 7 dni (lub mniej jeśli danych mało)
+    recent_days = ad_features.sort_values("ds").tail(7)
+    averages = recent_days[["Cost", "CTR", "Conversions", "Impressions"]].mean()
+
+    # Tworzymy DataFrame z brakującymi datami
+    missing = future[~future["ds"].isin(ad_features["ds"])]
+    for col in ["Cost", "CTR", "Conversions", "Impressions"]:
+        missing[col] = averages[col]
+
+    # Łączymy aktualne + brakujące
+    future = pd.concat([
+        future[future["ds"].isin(ad_features["ds"])].merge(ad_features, on="ds", how="left"),missing
+    ], ignore_index=True).sort_values("ds")
+
     forecast = model.predict(future)
     forecast_plot = model.plot(forecast)
     st.pyplot(forecast_plot)
